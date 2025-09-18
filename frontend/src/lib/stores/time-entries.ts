@@ -381,8 +381,6 @@ export const useTimeEntriesStore = create<TimeEntriesStore>((set, get) => ({
         }
         throw new Error('Entry not found for fallback update');
       }
-
-      return updatedEntry;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to edit time entry';
       set({ error: errorMessage });
