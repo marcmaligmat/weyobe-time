@@ -123,4 +123,7 @@ clockify_ss/
 # TypeScript
 *.tsbuildinfo
 
+# Claude Code files
+.claude/
+
 frontend_plan.txt
