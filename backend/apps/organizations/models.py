@@ -12,6 +12,7 @@ This module provides organization-related models that follow:
 from django.db import models
 from django.core.validators import RegexValidator
 from django.utils.text import slugify
+from django.utils import timezone
 from apps.common.models import BaseModel, StatusChoicesMixin
 
 
@@ -271,3 +272,299 @@ class Department(BaseModel, StatusChoicesMixin):
     def get_projects(self):
         """Get all projects in this department."""
         return self.projects.filter(is_deleted=False)
+
+
+class OrganizationMember(BaseModel):
+    """
+    Organization membership model with role-based permissions.
+
+    Follows Single Responsibility Principle - only manages organization membership.
+    """
+    ROLE_CHOICES = [
+        ('admin', 'Admin'),
+        ('manager', 'Manager'),
+        ('member', 'Member'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='memberships'
+    )
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='organization_memberships'
+    )
+
+    # Role and permissions
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
+
+    # Dates
+    joined_at = models.DateTimeField(default=timezone.now)
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    # Status
+    is_active = models.BooleanField(default=True)
+
+    # Permissions
+    can_invite_users = models.BooleanField(default=False)
+    can_manage_projects = models.BooleanField(default=False)
+    can_manage_teams = models.BooleanField(default=False)
+    can_view_reports = models.BooleanField(default=True)
+    can_manage_settings = models.BooleanField(default=False)
+    can_manage_billing = models.BooleanField(default=False)
+
+    # Invitation details
+    invited_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invited_memberships'
+    )
+
+    class Meta:
+        verbose_name = 'Organization Member'
+        verbose_name_plural = 'Organization Members'
+        unique_together = ['organization', 'user']
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['role']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.get_full_name()} - {self.organization.name}"
+
+    def save(self, *args, **kwargs):
+        """Set default permissions based on role."""
+        if self.pk is None:  # New instance
+            self.set_default_permissions()
+        super().save(*args, **kwargs)
+
+    def set_default_permissions(self):
+        """Set default permissions based on role."""
+        if self.role == 'admin':
+            self.can_invite_users = True
+            self.can_manage_projects = True
+            self.can_manage_teams = True
+            self.can_view_reports = True
+            self.can_manage_settings = True
+            self.can_manage_billing = True
+        elif self.role == 'manager':
+            self.can_invite_users = True
+            self.can_manage_projects = True
+            self.can_manage_teams = True
+            self.can_view_reports = True
+            self.can_manage_settings = False
+            self.can_manage_billing = False
+        else:  # member
+            self.can_invite_users = False
+            self.can_manage_projects = False
+            self.can_manage_teams = False
+            self.can_view_reports = True
+            self.can_manage_settings = False
+            self.can_manage_billing = False
+
+    @property
+    def is_admin(self):
+        """Check if user is an admin."""
+        return self.role == 'admin'
+
+    @property
+    def is_manager(self):
+        """Check if user is a manager."""
+        return self.role == 'manager'
+
+    @property
+    def is_member(self):
+        """Check if user is a member."""
+        return self.role == 'member'
+
+    def has_permission(self, permission):
+        """Check if user has specific permission."""
+        return getattr(self, f'can_{permission}', False)
+
+    def promote_to_manager(self):
+        """Promote member to manager."""
+        if self.role == 'member':
+            self.role = 'manager'
+            self.set_default_permissions()
+            self.save()
+
+    def promote_to_admin(self):
+        """Promote member/manager to admin."""
+        if self.role in ['member', 'manager']:
+            self.role = 'admin'
+            self.set_default_permissions()
+            self.save()
+
+    def demote_to_member(self):
+        """Demote manager/admin to member."""
+        if self.role in ['manager', 'admin']:
+            self.role = 'member'
+            self.set_default_permissions()
+            self.save()
+
+
+class Invitation(BaseModel):
+    """
+    Invitation model for inviting users to organizations.
+
+    Follows Single Responsibility Principle - only manages invitations.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+        ('expired', 'Expired'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='invitations'
+    )
+    email = models.EmailField()
+
+    # Inviter information
+    invited_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='sent_invitations'
+    )
+
+    # Role and department for the invited user
+    role = models.CharField(
+        max_length=20,
+        choices=OrganizationMember.ROLE_CHOICES,
+        default='member'
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invitations'
+    )
+
+    # Invitation details
+    message = models.TextField(blank=True)
+    token = models.CharField(max_length=255, unique=True)
+
+    # Status and dates
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='accepted_invitations'
+    )
+
+    class Meta:
+        verbose_name = 'Invitation'
+        verbose_name_plural = 'Invitations'
+        unique_together = ['organization', 'email', 'status']
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['email', 'status']),
+            models.Index(fields=['token']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def __str__(self):
+        return f"Invitation to {self.email} for {self.organization.name}"
+
+    def save(self, *args, **kwargs):
+        """Generate token and set expiration if new."""
+        if not self.token:
+            import secrets
+            self.token = secrets.token_urlsafe(32)
+
+        if not self.expires_at:
+            from datetime import timedelta
+            self.expires_at = timezone.now() + timedelta(days=7)
+
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        """Check if invitation is expired."""
+        return timezone.now() > self.expires_at
+
+    @property
+    def is_pending(self):
+        """Check if invitation is pending."""
+        return self.status == 'pending' and not self.is_expired
+
+    def accept(self, user):
+        """Accept the invitation."""
+        if not self.is_pending:
+            raise ValueError("Invitation is not in pending status or has expired")
+
+        if user.email != self.email:
+            raise ValueError("User email does not match invitation email")
+
+        # Create organization membership
+        membership, created = OrganizationMember.objects.get_or_create(
+            organization=self.organization,
+            user=user,
+            defaults={
+                'role': self.role,
+                'invited_by': self.invited_by,
+            }
+        )
+
+        # Update user's organization if not set
+        if not user.organization:
+            user.organization = self.organization
+            if self.department:
+                user.department = self.department
+            user.save(update_fields=['organization', 'department'])
+
+        # Update invitation status
+        self.status = 'accepted'
+        self.accepted_at = timezone.now()
+        self.accepted_by = user
+        self.save(update_fields=['status', 'accepted_at', 'accepted_by'])
+
+        return membership
+
+    def decline(self):
+        """Decline the invitation."""
+        if not self.is_pending:
+            raise ValueError("Invitation is not in pending status")
+
+        self.status = 'declined'
+        self.save(update_fields=['status'])
+
+    def cancel(self):
+        """Cancel the invitation."""
+        if self.status not in ['pending']:
+            raise ValueError("Can only cancel pending invitations")
+
+        self.status = 'cancelled'
+        self.save(update_fields=['status'])
+
+    def extend_expiration(self, days=7):
+        """Extend invitation expiration."""
+        if self.status != 'pending':
+            raise ValueError("Can only extend pending invitations")
+
+        from datetime import timedelta
+        self.expires_at = timezone.now() + timedelta(days=days)
+        self.save(update_fields=['expires_at'])
+
+    @classmethod
+    def cleanup_expired(cls):
+        """Mark expired invitations as expired."""
+        expired_invitations = cls.objects.filter(
+            status='pending',
+            expires_at__lt=timezone.now()
+        )
+        expired_invitations.update(status='expired')

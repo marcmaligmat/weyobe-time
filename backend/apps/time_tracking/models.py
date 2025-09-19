@@ -98,6 +98,13 @@ class TimeEntry(OrganizationScopedModel, ApprovalStatusMixin):
         blank=True,
         related_name='time_entries'
     )
+    task = models.ForeignKey(
+        'projects.Task',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='time_entries'
+    )
     department = models.ForeignKey(
         'organizations.Department',
         on_delete=models.SET_NULL,
@@ -164,6 +171,7 @@ class TimeEntry(OrganizationScopedModel, ApprovalStatusMixin):
         indexes = [
             models.Index(fields=['user', 'date']),
             models.Index(fields=['project', 'date']),
+            models.Index(fields=['task', 'date']),
             models.Index(fields=['organization', 'date']),
             models.Index(fields=['status']),
             models.Index(fields=['is_billable']),
